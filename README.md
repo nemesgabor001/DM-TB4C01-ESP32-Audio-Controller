@@ -1,6 +1,6 @@
 # DM-TB4C01 ESP32 Audio Controller (TDA7440 + ST7735)
 
-![DM-TB4C01 Specifications](dm-tb4c01-specs.jpg
+![DM-TB4C01 Specifications](dm-tb4c01-specs.jpg)
 
 A high-performance, robust, and pixel-perfect digital audio preamplifier firmware built for the **diymore DM-TB4C01** evaluation platform. It utilizes an **ESP32 NodeMCU** to interface with a **TDA7440** integrated audio processor chip and displays a crisp custom UI on an integrated **ST7735S 160x80 TFT Display**.
 
