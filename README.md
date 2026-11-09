@@ -1,5 +1,7 @@
 # DM-TB4C01 ESP32 Audio Controller (TDA7440 + ST7735)
 
+![DM-TB4C01 Specifications](dm-tb4c01-specs.jpg
+
 A high-performance, robust, and pixel-perfect digital audio preamplifier firmware built for the **diymore DM-TB4C01** evaluation platform. It utilizes an **ESP32 NodeMCU** to interface with a **TDA7440** integrated audio processor chip and displays a crisp custom UI on an integrated **ST7735S 160x80 TFT Display**.
 
 ---
@@ -23,7 +25,7 @@ This motherboard is widely available on **AliExpress** (sold under the diymore /
 ---
 
 ## 🕹️ User Interface & Operation Logic
-
+![Custom UI on ST7735 Display](lcd.jpg)
 This firmware introduces a highly intuitive, premium amplifier-style state machine logic using the 4 direct keys and the clickable rotary encoder dial:
 
 1. **Default Mode (Volume Control):** Upon boot, the highlighted green variable is always **VOL** (Volume). Turning the encoder directly attenuates the sound from `-80dB` (minimum) to `0dB` (maximum).
@@ -50,7 +52,7 @@ The firmware is fully verified and compiled under the following software stack:
 - **Adafruit_ST7735 and ST7789 Library** v1.12.0
 
 ## 🔌 Hardware Pinout (DM-TB4C01 Native Layout)
-
+![DM-TB4C01 Physical Board Layout](board.jpg)
 | Peripheral | Function | ESP32 GPIO Pin |
 | :--- | :--- | :--- |
 | **ST7735 TFT** | Chip Select (CS) | **GPIO 15** |
