@@ -28,7 +28,7 @@ This motherboard is widely available on **AliExpress** (sold under the diymore /
 ![Custom UI on ST7735 Display](lcd.jpg)
 This firmware introduces a highly intuitive, premium amplifier-style state machine logic using the 4 direct keys and the clickable rotary encoder dial:
 
-1. **Default Mode (Volume Control):** Upon boot, the highlighted green variable is always **VOL** (Volume). Turning the encoder directly attenuates the sound from `-80dB` (minimum) to `0dB` (maximum).
+1. **Default Mode (Volume Control):** Upon boot, the highlighted green variable is always **VOL** (Volume). Turning the encoder directly attenuates the sound from `-50dB` (minimum) to `+30dB` (maximum).
 2. **Dynamic Dial Acceleration:** When adjusting the volume, a smart mathematical filter detects how fast you spin the dial. Slow rotation tweaks the volume by `1dB`, while a rapid spin automatically switches to `3dB` steps to let you change volume levels quickly.
 3. **Menu Selection:** Pressing any of the dedicated keys (`BAS`, `TRE`, `BAL`, `SRC`) instantly highlights that parameter in **green**, allowing the rotary encoder to modify its specific sub-value.
 4. **Auto-Timeout Return to Volume (5s):** If you adjust a sub-parameter (e.g., boosting the Bass or switching input sources) and do not touch the controls for **5 seconds**, the UI selection cursor automatically snaps back to **VOL**. This ensures the dial is always ready for volume control without requiring manual clicks.
