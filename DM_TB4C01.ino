@@ -410,35 +410,46 @@ Wire.endTransmission();
 }
 // --- SYNC STATE TO TDA7440 AUDIO PROCESSOR HARDWARE ---
 void updateAudioHardware(int targetVol) {
-int chIdx = constrain(inputSource - 1, 0, 3);
-// 1. REGISTER 0x00: Input Selector & Input Gain Stage (0 to +30dB)
-byte gainVal = (targetVol > 0) ? constrain(targetVol / 2, 0, 15) : 0;
-tdaWrite(0x00, chIdx | (gainVal << 3));
-// 2. REGISTER 0x02: Main Volume Attenuation (0 to 55dB attenuation)
-int finalVolAttenuation = (targetVol < 0) ? abs(targetVol) : 0;
-if (isMuted) {
-tdaWrite(0x02, 56); // Safe maximum attenuation (Hardware Mute state)
-} else {
-byte volVal = constrain(finalVolAttenuation, 0, 47);
-tdaWrite(0x02, volVal);
-}
-// 3. REGISTERS 0x04 & 0x05: Left & Right Speaker Attenuation (Balance Block)
-int extraAttenuation = (finalVolAttenuation > 47) ? (finalVolAttenuation - 47) : 0;
-int attenuationL = extraAttenuation;
-int attenuationR = extraAttenuation;
-if (balance < 0)  attenuationR += abs(balance);
-else if (balance > 0) attenuationL += abs(balance);
-tdaWrite(0x04, constrain(attenuationL, 0, 79)); // Left Speaker Attenuation
-tdaWrite(0x05, constrain(attenuationR, 0, 79)); // Right Speaker Attenuation
-// 4. REGISTERS 0x06 & 0x07: Tone Control (Per-Channel Bass & Treble + Loudness Boost)
-int effectiveBass = channelBass[chIdx];
-int effectiveTreble = channelTreble[chIdx];
-if (isLoudnessOn && targetVol < -15) {
-// Gradually boosts up to +4dB Bass and +2dB Treble as volume drops from -15dB to -45dB
-int loudFactor = constrain(abs(targetVol + 15), 0, 30);
-effectiveBass   = constrain(effectiveBass + ((loudFactor * 4) / 30), -14, 14);
-effectiveTreble = constrain(effectiveTreble + ((loudFactor * 2) / 30), -14, 14);
-}
-tdaWrite(0x06, 7 - (effectiveBass / 2));   // Register 0x06 handles Bass on TDA7440
-tdaWrite(0x07, 7 - (effectiveTreble / 2)); // Register 0x07 handles Treble on TDA7440
+  int chIdx = constrain(inputSource - 1, 0, 3);
+
+  // 1. REGISTER 0x00: Input Selector (reversed board layout: 3 - chIdx) & Input Gain (0 to +30dB)
+  byte hwInput = 3 - chIdx;
+  byte gainVal = (targetVol > 0) ? constrain(targetVol / 2, 0, 15) : 0;
+  tdaWrite(0x00, hwInput | (gainVal << 3));
+
+  // 2. REGISTER 0x02: Main Volume Attenuation (0 to 47dB)
+  int finalVolAttenuation = (targetVol < 0) ? abs(targetVol) : 0;
+  if (isMuted) {
+    tdaWrite(0x02, 56); // Hardware Mute state
+  } else {
+    byte volVal = constrain(finalVolAttenuation, 0, 47);
+    tdaWrite(0x02, volVal);
+  }
+
+  // 3. REGISTERS 0x04 & 0x05: Tone Control (TDA7440: 0x04 = Bass, 0x05 = Treble)
+  // Scale: 0 = -14dB, 7 = 0dB, 14 = +14dB
+  int effectiveBass = channelBass[chIdx];
+  int effectiveTreble = channelTreble[chIdx];
+
+  if (isLoudnessOn && targetVol < -15) {
+    int loudFactor = constrain(abs(targetVol + 15), 0, 30);
+    effectiveBass   = constrain(effectiveBass + ((loudFactor * 4) / 30), -14, 14);
+    effectiveTreble = constrain(effectiveTreble + ((loudFactor * 2) / 30), -14, 14);
+  }
+
+  byte bassRegVal   = constrain(7 + (effectiveBass / 2), 0, 14);
+  byte trebleRegVal = constrain(7 + (effectiveTreble / 2), 0, 14);
+  tdaWrite(0x04, bassRegVal);   // Register 0x04 = Bass
+  tdaWrite(0x05, trebleRegVal); // Register 0x05 = Treble
+
+  // 4. REGISTERS 0x06 & 0x07: Speaker Attenuation / Balance (TDA7440: 0x06 = Left, 0x07 = Right)
+  int extraAttenuation = (finalVolAttenuation > 47) ? (finalVolAttenuation - 47) : 0;
+  int attenuationL = extraAttenuation;
+  int attenuationR = extraAttenuation;
+
+  if (balance < 0)      attenuationR += abs(balance);
+  else if (balance > 0) attenuationL += abs(balance);
+
+  tdaWrite(0x06, constrain(attenuationL, 0, 79)); // Register 0x06 = Left Speaker
+  tdaWrite(0x07, constrain(attenuationR, 0, 79)); // Register 0x07 = Right Speaker
 }
