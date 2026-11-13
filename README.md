@@ -32,19 +32,21 @@ This motherboard is widely available on **AliExpress** (sold under the diymore /
 - **Per-Channel Audio Profiles (`IN1`–`IN4`):** Independent non-volatile memory for Volume, Bass, and Treble per input channel.
 - **Soft-Ramp Volume Transitions:** Smooth stepped volume fading to prevent audible clicks and pops.
 - **Physiological Loudness (`LDNS`):** Dynamic low-volume contour compensation boosting Bass and Treble.
-- **PWM Display Auto-Dimmer:** Automatically dims the TFT backlight after inactivity and wakes cleanly on interaction.
+- **PWM Display Auto-Dimmer (30s):** Automatically dims the TFT backlight after **30 seconds** of inactivity to reduce glare and extend display lifespan, waking cleanly on the first interaction.
 
 ## 🕹️ User Interface & Operation Logic
 ![Custom UI on ST7735 Display](lcd.jpg)
 
 This firmware introduces an intuitive, amplifier-style state machine using the 4 dedicated tactile keys and the clickable rotary encoder:
 
-1. **Default Mode (Volume Control):** Upon boot, the active green parameter is always **VOL** (Volume). Turning the encoder directly attenuates the audio from `-50dB` (minimum) to `+30dB` (maximum).
+1. **Default Mode (Volume Control):** Upon boot, the active green parameter is always **VOL** (Volume). Turning the encoder directly attenuates the audio from `-55dB` (minimum) to `+30dB` (maximum).
 2. **Direct Menu Selection:** Pressing any of the dedicated keys (`BAS`, `TRE`, `BAL`, `SRC`) instantly highlights that parameter in **green**, allowing the rotary encoder to modify its specific value.
 3. **Auto-Timeout Return to Volume (5s):** If you adjust a sub-parameter (e.g., boosting Bass or switching input sources) and leave the controls idle for **5 seconds**, the selection cursor automatically snaps back to **VOL**. This keeps the dial ready for volume adjustments without extra clicks.
-4. **Context-Aware Encoder Push Button (`PUSH`):** The built-in rotary push button features a dual-mode operation depending on the current menu state:
-   - **From Sub-Menus (Quick Exit):** When adjusting a sub-parameter (like `TRE` or `BAL`), pressing `PUSH` immediately exits the sub-menu and returns focus to **VOL** without altering the audio output.
-   - **From Main Menu (Mute Toggle):** When the cursor is already on **VOL**, pressing `PUSH` toggles the **MUTE** state. A bright red **MUTE** warning overrides the screen layout. Turning the dial or pressing any menu key instantly disengages mute.
+4. **Context-Aware Encoder Push Button (`PUSH`):** The rotary push button performs different actions based on the menu level and press duration:
+   - **Short Press (Sub-Menu):** Exits the sub-parameter (e.g., `TRE`, `BAL`) and returns focus to **VOL**.
+   - **Short Press (Main Menu / VOL):** Toggles **MUTE** on/off (indicated by a red warning; turning the dial or pressing a key unmutes).
+   - **Long Press (1.5s):** Toggles the Physiological Loudness (`LDNS`) contour for dynamic low-volume bass and treble boost.
+5. **Auto-Dimming Display Wake-Up (30s):** After **30 seconds** of inactivity, the display smoothly dims its backlight. Turning the encoder or pressing any key immediately restores full brightness without altering the current audio settings on that first wake-up interaction.
 
 ---
 
@@ -66,7 +68,7 @@ The firmware is fully verified and compiled under the following software stack:
 | **ST7735 TFT** | Serial Clock (SCLK) | **GPIO 18** |
 | **ST7735 TFT** | Master Out (MOSI/SDA)| **GPIO 23** |
 | **ST7735 TFT** | Backlight Control (BLK)| **GPIO 32** |
-| **Tactile Key** | Channel Source (CH) | **GPIO 33** |
+| **Tactile Key** | Channel Source (SRC) | **GPIO 33** |
 | **Tactile Key** | Bass Level (BAS) | **GPIO 27** |
 | **Tactile Key** | Treble Level (TRE) | **GPIO 14** |
 | **Tactile Key** | Balance Adjustment (BAL)| **GPIO 13** |
