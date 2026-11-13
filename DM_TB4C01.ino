@@ -408,6 +408,19 @@ Wire.write(reg);
 Wire.write(val);
 Wire.endTransmission();
 }
+
+// --- HELPER: EXACT TDA7440 TONE BIT ENCODING (-14dB to +14dB) ---
+byte encodeTdaTone(int dbValue) {
+  dbValue = constrain(dbValue, -14, 14);
+  if (dbValue <= 0) {
+    // -14dB -> 0, -12dB -> 1, ..., 0dB -> 7
+    return (dbValue + 14) / 2;
+  } else {
+    // +2dB -> 15, +4dB -> 14, ..., +14dB -> 8
+    return 15 - ((dbValue - 2) / 2);
+  }
+}
+
 // --- SYNC STATE TO TDA7440 AUDIO PROCESSOR HARDWARE ---
 void updateAudioHardware(int targetVol) {
   int chIdx = constrain(inputSource - 1, 0, 3);
@@ -426,8 +439,7 @@ void updateAudioHardware(int targetVol) {
     tdaWrite(0x02, volVal);
   }
 
-  // 3. REGISTERS 0x04 & 0x05: Tone Control (TDA7440: 0x04 = Bass, 0x05 = Treble)
-  // Scale: 0 = -14dB, 7 = 0dB, 14 = +14dB
+    // 3. REGISTERS 0x04 & 0x05: Tone Control (TDA7440: 0x04 = Bass, 0x05 = Treble)
   int effectiveBass = channelBass[chIdx];
   int effectiveTreble = channelTreble[chIdx];
 
@@ -437,10 +449,8 @@ void updateAudioHardware(int targetVol) {
     effectiveTreble = constrain(effectiveTreble + ((loudFactor * 2) / 30), -14, 14);
   }
 
-  byte bassRegVal   = constrain(7 + (effectiveBass / 2), 0, 14);
-  byte trebleRegVal = constrain(7 + (effectiveTreble / 2), 0, 14);
-  tdaWrite(0x04, bassRegVal);   // Register 0x04 = Bass
-  tdaWrite(0x05, trebleRegVal); // Register 0x05 = Treble
+  tdaWrite(0x03, encodeTdaTone(effectiveBass));   // Register 0x04 = Bass
+  tdaWrite(0x05, encodeTdaTone(effectiveTreble)); // Register 0x05 = Treble
 
   // 4. REGISTERS 0x06 & 0x07: Speaker Attenuation / Balance (TDA7440: 0x06 = Left, 0x07 = Right)
   int extraAttenuation = (finalVolAttenuation > 47) ? (finalVolAttenuation - 47) : 0;
