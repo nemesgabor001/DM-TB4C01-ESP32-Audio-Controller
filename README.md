@@ -9,7 +9,6 @@ A high-performance, robust, and pixel-perfect digital audio preamplifier firmwar
 ### 📢 Community & Project Note
 This motherboard is widely available on **AliExpress** (sold under the diymore / Gaqqee brands). Unfortunately, many distributors fail to provide any working source code, documentation, or libraries to the buyers upon purchase. This repository was created out of frustration to fill that gap, offering the community a reliable, fully reverse-engineered, and open-source solution to finally bring this great hardware to life.
 
-
 ## ⚠️ CRITICAL BUYING & SAFETY WARNINGS (READ BEFORE SETUP)
 
 ### 1. Mandatory Controller Board Requirement
@@ -24,25 +23,30 @@ This motherboard is widely available on **AliExpress** (sold under the diymore /
 
 ---
 
+## 🚀 Key Technical Features
+
+- **Hardware-Interrupt Rotary Encoder:** Precise quadrature decoding running on hardware interrupts, guaranteeing zero dropped steps even during rapid dial turns.
+- **Dynamic Dial Acceleration:** A smart mathematical filter detects rotation speed. Slow turns adjust volume by `1dB`, while rapid spins automatically switch to `3dB` steps for quick level changes.
+- **Ghost-Pixel Prevention Layout:** Custom right-aligned, dynamically erased display bounding boxes ensure crisp value updates without visual rendering artifacts.
+- **Smart EEPROM Flash Save (3s):** To preserve Flash write cycles, a non-volatile memory dump executes only after **3 seconds of total user inactivity**, keeping your volume, balance, tone, and input settings safe against power cuts.
+- **Per-Channel Audio Profiles (`IN1`–`IN4`):** Independent non-volatile memory for Volume, Bass, and Treble per input channel.
+- **Soft-Ramp Volume Transitions:** Smooth stepped volume fading to prevent audible clicks and pops.
+- **Physiological Loudness (`LDNS`):** Dynamic low-volume contour compensation boosting Bass and Treble.
+- **PWM Display Auto-Dimmer:** Automatically dims the TFT backlight after inactivity and wakes cleanly on interaction.
+
 ## 🕹️ User Interface & Operation Logic
 ![Custom UI on ST7735 Display](lcd.jpg)
-This firmware introduces a highly intuitive, premium amplifier-style state machine logic using the 4 direct keys and the clickable rotary encoder dial:
 
-1. **Default Mode (Volume Control):** Upon boot, the highlighted green variable is always **VOL** (Volume). Turning the encoder directly attenuates the sound from `-50dB` (minimum) to `+30dB` (maximum).
-2. **Dynamic Dial Acceleration:** When adjusting the volume, a smart mathematical filter detects how fast you spin the dial. Slow rotation tweaks the volume by `1dB`, while a rapid spin automatically switches to `3dB` steps to let you change volume levels quickly.
-3. **Menu Selection:** Pressing any of the dedicated keys (`BAS`, `TRE`, `BAL`, `SRC`) instantly highlights that parameter in **green**, allowing the rotary encoder to modify its specific sub-value.
-4. **Auto-Timeout Return to Volume (5s):** If you adjust a sub-parameter (e.g., boosting the Bass or switching input sources) and do not touch the controls for **5 seconds**, the UI selection cursor automatically snaps back to **VOL**. This ensures the dial is always ready for volume control without requiring manual clicks.
-5. **Intelligent Encoder Push Button (`PUSH`):** The built-in push button on the rotary dial features a context-aware dual-mode operation:
-   - **From Sub-Menus:** If you are currently adjusting a sub-parameter (like `TRE` or `BAL`), pressing the `PUSH` button instantly aborts the menu and brings focus back to **VOL** without altering the audio feed.
-   - **From Main Menu (Mute Toggle):** If the cursor is already on **VOL**, pressing the `PUSH` button instantly toggles **MUTE** state. A bright red **MUTE** warning message overrides the screen layout. Turning the dial or pressing any menu key instantly disengages the mute safe-lock.
-6. **Smart EEPROM Flash Save (3s):** To save Flash write cycles, a non-volatile memory dump is executed only after **3 seconds of total user inactivity**. Your preferred volume, balance, tone levels, and input channels are completely secure against sudden power cuts.
+This firmware introduces an intuitive, amplifier-style state machine using the 4 dedicated tactile keys and the clickable rotary encoder:
+
+1. **Default Mode (Volume Control):** Upon boot, the active green parameter is always **VOL** (Volume). Turning the encoder directly attenuates the audio from `-50dB` (minimum) to `+30dB` (maximum).
+2. **Direct Menu Selection:** Pressing any of the dedicated keys (`BAS`, `TRE`, `BAL`, `SRC`) instantly highlights that parameter in **green**, allowing the rotary encoder to modify its specific value.
+3. **Auto-Timeout Return to Volume (5s):** If you adjust a sub-parameter (e.g., boosting Bass or switching input sources) and leave the controls idle for **5 seconds**, the selection cursor automatically snaps back to **VOL**. This keeps the dial ready for volume adjustments without extra clicks.
+4. **Context-Aware Encoder Push Button (`PUSH`):** The built-in rotary push button features a dual-mode operation depending on the current menu state:
+   - **From Sub-Menus (Quick Exit):** When adjusting a sub-parameter (like `TRE` or `BAL`), pressing `PUSH` immediately exits the sub-menu and returns focus to **VOL** without altering the audio output.
+   - **From Main Menu (Mute Toggle):** When the cursor is already on **VOL**, pressing `PUSH` toggles the **MUTE** state. A bright red **MUTE** warning overrides the screen layout. Turning the dial or pressing any menu key instantly disengages mute.
 
 ---
-
-## 🚀 Features
-
-- **Hardware-Interrupt Rotary Encoder:** Precise quadrature decoding running on hardware interrupts. Guaranteed zero dropped steps even during rapid dial turns.
-- **Ghost-Pixel Prevention Layout:** Custom right-aligned dynamically erased display bounding boxes to guarantee crisp value changes without visual rendering artifacts.
 
 ## 🛠️ Software & Library Versions
 
@@ -53,6 +57,7 @@ The firmware is fully verified and compiled under the following software stack:
 
 ## 🔌 Hardware Pinout (DM-TB4C01 Native Layout)
 ![DM-TB4C01 Physical Board Layout](board.jpg)
+
 | Peripheral | Function | ESP32 GPIO Pin |
 | :--- | :--- | :--- |
 | **ST7735 TFT** | Chip Select (CS) | **GPIO 15** |
