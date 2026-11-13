@@ -2,21 +2,8 @@
  * @file DM-TB4C01_ESP32_Audio_Controller.ino
  * @brief Digital audio controller firmware for diymore DM-TB4C01 baseboard and TDA7440 chip.
  * @author [Gabor Nemes / nemesgabor001@gmail.com]
- * @version 1.0.0
- * @date 09.11.2026
- * 
- * @note Software & Library Dependencies:
- * - Arduino IDE v2.3.10
- * - Adafruit_GFX Library v1.13.0
- * - Adafruit_ST7735 and ST7789 Library v1.12.0
- * - Wire (Built-in ESP32 I2C library)
- * - Preferences (Built-in ESP32 EEPROM alternative)
- * 
- * Hardware Pinout (Verified via continuity test):
- * - ST7735 TFT Display: CS=15, DC=2, RST=4, SCLK=18, MOSI=23, BLK=32
- * - Tactile Buttons: CH=33, BAS=27, TRE=14, BAL=13, PUSH=12 (Rotary click)
- * - Rotary Encoder: Phase A=26, Phase B=25
- * - TDA7440 I2C Bus: SDA=21, SCL=22
+ * @version 2.0.0 (Per-Channel Audio Profiles, Soft-Ramp, Loudness & Auto-Dimmer)
+ * @date 13.11.2026
  */
 
 #include <Adafruit_GFX.h>    
@@ -54,13 +41,29 @@ const int ENCODER_B = 25;
 // State Machine Index: 0=VOL, 1=BAS, 2=TRE, 3=BAL, 4=SRC
 int currentMode = 0; 
 
-int volumeDb    = -20; // Range: -80dB to 0dB
-int bassDb      = 6;   // Range: -14dB to +14dB
-int trebleDb    = 0;   // Range: -14dB to +14dB
-int balance     = 0;   // Range: -40 to +40 (Left / Right attenuation)
-int inputSource = 2;   // Range: 1 to 4 channels (IN1 - IN4)
+// Per-channel Audio Profiles (Index 0=IN1, 1=IN2, 2=IN3, 3=IN4)
+int channelVolume[4] = {-20, -20, -20, -20}; // Range: -55dB to +30dB
+int channelBass[4]   = {6, 6, 6, 6};         // Range: -14dB to +14dB
+int channelTreble[4] = {0, 0, 0, 0};         // Range: -14dB to +14dB
 
-bool isMuted = false;
+int balance     = 0;   // Global Balance: -40 to +40 (Left / Right attenuation)
+int inputSource = 2;   // Active channel: 1 to 4 (IN1 - IN4)
+
+bool isMuted       = false;
+bool isLoudnessOn  = false;
+
+// Soft-Ramp Volume Transition variables
+int currentAppliedVol = -55; // Tracks real-time hardware volume for smooth ramping
+
+// Display Auto-Dimmer variables
+const int DIM_TIMEOUT_MS = 30000; // 30 seconds until dim
+const int BRIGHTNESS_HIGH = 255;  // 100% brightness
+const int BRIGHTNESS_LOW  = 45;   // ~18% standby brightness
+bool isDisplayDimmed = false;
+
+// Push button long-press (1.5s hold = Loudness toggle, short press = Mute/Back)
+unsigned long pushPressStart = 0;
+bool pushLongHandled = false;
 
 // Quadrature decoder variables
 volatile int encoderSteps = 0;
@@ -74,7 +77,6 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RS
 Preferences prefs; 
 
 // --- HARDWARE INTERRUPT SERVICE ROUTINE (ISR) ---
-// Runs instantly in the background to handle fast encoder rotation without dropping steps
 void IRAM_ATTR encoderInterrupt() {
   byte encoderStateCurrent = (digitalRead(ENCODER_A) << 1) | digitalRead(ENCODER_B);
   
@@ -95,12 +97,23 @@ void IRAM_ATTR encoderInterrupt() {
   }
 }
 
+// Helper to wake up dimmed display on any user activity
+bool wakeDisplayIfDimmed() {
+  lastInteractionTime = millis();
+  if (isDisplayDimmed) {
+    analogWrite(TFT_BLK, BRIGHTNESS_HIGH);
+    isDisplayDimmed = false;
+    return true; // Was dimmed, just woke up
+  }
+  return false;
+}
+
 void setup() {
   Serial.begin(115200);
 
-  // Turn on display backlight
+  // Configure display backlight PWM
   pinMode(TFT_BLK, OUTPUT);
-  digitalWrite(TFT_BLK, HIGH);
+  analogWrite(TFT_BLK, BRIGHTNESS_HIGH);
 
   // Configure control buttons with internal pullups
   pinMode(PIN_CH, INPUT_PULLUP);
@@ -112,10 +125,8 @@ void setup() {
   pinMode(ENCODER_A, INPUT_PULLUP);
   pinMode(ENCODER_B, INPUT_PULLUP);
 
-  // Read initial encoder phase before attaching interrupts
   encoderStatePrevious = (digitalRead(ENCODER_A) << 1) | digitalRead(ENCODER_B);
 
-  // Attach hardware interrupts to both encoder pins for precise decoding
   attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderInterrupt, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCODER_B), encoderInterrupt, CHANGE);
 
@@ -123,16 +134,18 @@ void setup() {
   Wire.begin(21, 22);
   delay(100);
 
-  // --- MEMORY LOAD (Restore last saved settings from non-volatile storage) ---
+  // --- MEMORY LOAD (Restore Per-Channel Profiles & Global Settings) ---
   prefs.begin("audio-settings", false);
-  volumeDb    = prefs.getInt("volume", -20);
-  bassDb      = prefs.getInt("bass", 6);
-  trebleDb    = prefs.getInt("treble", 0);
-  balance     = prefs.getInt("balance", 0); 
-  inputSource = prefs.getInt("input", 2);
+  for (int i = 0; i < 4; i++) {
+    String idx = String(i + 1);
+    channelVolume[i] = constrain(prefs.getInt(("vol" + idx).c_str(), -20), -55, 30);
+    channelBass[i]   = constrain(prefs.getInt(("bas" + idx).c_str(), 6), -14, 14);
+    channelTreble[i] = constrain(prefs.getInt(("tre" + idx).c_str(), 0), -14, 14);
+  }
+  balance      = constrain(prefs.getInt("balance", 0), -40, 40); 
+  inputSource  = constrain(prefs.getInt("input", 2), 1, 4);
+  isLoudnessOn = prefs.getBool("loudness", false);
   prefs.end();
-
-  updateAudioHardware();
 
   // Initialize ST7735S 160x80 TFT Display profile
   tft.initR(INITR_MINI160x80); 
@@ -141,46 +154,129 @@ void setup() {
   tft.fillScreen(PANEL_BLACK); 
 
   updateDisplayGUI();
+
+  // Soft-Ramp boot fade-in from -55dB to saved channel volume
+  int activeCh = constrain(inputSource - 1, 0, 3);
+  currentAppliedVol = -55;
+  softRampToVolume(channelVolume[activeCh]);
+
   lastInteractionTime = millis();
 }
 
 void loop() {
-  // --- BUTTON SCANNING & MODE SWITCHING ---
-  if (digitalRead(PIN_PUSH) == LOW) { 
-    if (currentMode != 0) { currentMode = 0; } // Quick return to Volume menu
-    else { isMuted = !isMuted; updateAudioHardware(); } // Toggle Mute if already in Volume menu
-    lastInteractionTime = millis(); updateDisplayGUI(); delay(250); 
+  int chIdx = constrain(inputSource - 1, 0, 3);
+
+  // --- ROTARY PUSH BUTTON (SHORT PRESS = MUTE/BACK, 1.5s HOLD = LOUDNESS TOGGLE) ---
+  bool pushPressed = (digitalRead(PIN_PUSH) == LOW);
+
+  if (pushPressed) {
+    wakeDisplayIfDimmed();
+    if (pushPressStart == 0) {
+      pushPressStart = millis();
+      pushLongHandled = false;
+    } 
+    else if (!pushLongHandled && (millis() - pushPressStart >= 1500)) {
+      // 1.5 second hold -> Toggle Physiological Loudness mode
+      pushLongHandled = true;
+      isLoudnessOn = !isLoudnessOn;
+      isMuted = false;
+      updateAudioHardware(channelVolume[chIdx]);
+      updateDisplayGUI();
+      saveRequired = true;
+    }
+  } else {
+    if (pushPressStart > 0) {
+      if (!pushLongHandled && (millis() - pushPressStart > 30)) {
+        // Short press -> Return to VOL or Toggle MUTE
+        if (currentMode != 0) { 
+          currentMode = 0; 
+        } else { 
+          isMuted = !isMuted; 
+          if (!isMuted) {
+            // Soft ramp back from mute
+            currentAppliedVol = -55;
+            softRampToVolume(channelVolume[chIdx]);
+          } else {
+            updateAudioHardware(channelVolume[chIdx]);
+          }
+        }
+        lastInteractionTime = millis(); 
+        updateDisplayGUI(); 
+      }
+      pushPressStart = 0;
+      pushLongHandled = false;
+    }
   }
-  if (digitalRead(PIN_BAS) == LOW)  { currentMode = 1; isMuted = false; lastInteractionTime = millis(); updateDisplayGUI(); delay(250); }
-  if (digitalRead(PIN_TRE) == LOW)  { currentMode = 2; isMuted = false; lastInteractionTime = millis(); updateDisplayGUI(); delay(250); }
-  if (digitalRead(PIN_BAL) == LOW)  { currentMode = 3; isMuted = false; lastInteractionTime = millis(); updateDisplayGUI(); delay(250); }
-  if (digitalRead(PIN_CH) == LOW)   { currentMode = 4; isMuted = false; lastInteractionTime = millis(); updateDisplayGUI(); delay(250); }
+
+  // --- DEDICATED MENU KEYS ---
+  if (digitalRead(PIN_BAS) == LOW) {
+    if (!wakeDisplayIfDimmed()) { currentMode = 1; isMuted = false; updateAudioHardware(channelVolume[chIdx]); updateDisplayGUI(); }
+    delay(250);
+  }
+  if (digitalRead(PIN_TRE) == LOW) {
+    if (!wakeDisplayIfDimmed()) { currentMode = 2; isMuted = false; updateAudioHardware(channelVolume[chIdx]); updateDisplayGUI(); }
+    delay(250);
+  }
+  if (digitalRead(PIN_BAL) == LOW) {
+    if (!wakeDisplayIfDimmed()) { currentMode = 3; isMuted = false; updateAudioHardware(channelVolume[chIdx]); updateDisplayGUI(); }
+    delay(250);
+  }
+  if (digitalRead(PIN_CH) == LOW) {
+    if (!wakeDisplayIfDimmed()) { currentMode = 4; isMuted = false; updateAudioHardware(channelVolume[chIdx]); updateDisplayGUI(); }
+    delay(250);
+  }
 
   // --- ROTARY ENCODER PROCESSING ---
   if (abs(encoderSteps) >= 4) {
-    noInterrupts(); // Protect shared variables from ISR context switching
+    noInterrupts(); 
     int localSteps = encoderSteps;
     encoderSteps = 0;
     interrupts();
 
+    // If display was dimmed, first turn wakes it up cleanly without accidental volume jump
+    if (wakeDisplayIfDimmed()) {
+      return;
+    }
+
     int direction = (localSteps > 0) ? 1 : -1;
-    
-    // Dynamic acceleration: if spun rapidly, increase stepping size for volume
+
+    // Dynamic acceleration for Volume
     if (abs(localSteps) >= 8 && currentMode == 0) {
       direction *= 3; 
     }
 
     isMuted = false; // Automatically unmute on turning the dial
 
-    // Modify selected parameter based on the active mode
-    if (currentMode == 0)      volumeDb    = constrain(volumeDb + direction, -55, 30); 
-    else if (currentMode == 1) bassDb      = constrain(bassDb + direction, -14, 14);
-    else if (currentMode == 2) trebleDb    = constrain(trebleDb + direction, -14, 14);
-    else if (currentMode == 3) balance     = constrain(balance + direction, -40, 40); 
-    else if (currentMode == 4) inputSource = constrain(inputSource + direction, 1, 4);
+    if (currentMode == 0) {
+      channelVolume[chIdx] = constrain(channelVolume[chIdx] + direction, -55, 30);
+      currentAppliedVol = channelVolume[chIdx];
+      updateAudioHardware(currentAppliedVol);
+    } 
+    else if (currentMode == 1) {
+      channelBass[chIdx] = constrain(channelBass[chIdx] + direction, -14, 14);
+      updateAudioHardware(channelVolume[chIdx]);
+    } 
+    else if (currentMode == 2) {
+      channelTreble[chIdx] = constrain(channelTreble[chIdx] + direction, -14, 14);
+      updateAudioHardware(channelVolume[chIdx]);
+    } 
+    else if (currentMode == 3) {
+      balance = constrain(balance + direction, -40, 40);
+      updateAudioHardware(channelVolume[chIdx]);
+    } 
+    else if (currentMode == 4) {
+      int newSource = constrain(inputSource + direction, 1, 4);
+      if (newSource != inputSource) {
+        inputSource = newSource;
+        int newChIdx = inputSource - 1;
+        updateDisplayGUI(); // Update UI immediately with new channel's profile
+        softRampToVolume(channelVolume[newChIdx]); // Smoothly transition volume to new channel
+      }
+    }
 
-    updateAudioHardware(); 
-    updateDisplayGUI();   
+    if (currentMode != 4) {
+      updateDisplayGUI();
+    }
     
     lastInteractionTime = millis();
     saveRequired = true;
@@ -191,149 +287,158 @@ void loop() {
     currentMode = 0;
     updateDisplayGUI();
   }
-
-  // --- SMART NON-VOLATILE FLASH SAVE (Triggers after 3 seconds of inactivity) ---
-  if (saveRequired && (millis() - lastInteractionTime > 3000)) {
-    prefs.begin("audio-settings", false);
-    prefs.putInt("volume", volumeDb);
-    prefs.putInt("bass", bassDb);
-    prefs.putInt("treble", trebleDb);
-    prefs.putInt("balance", balance); 
-    prefs.putInt("input", inputSource);
-    prefs.end();
-    saveRequired = false;
-    Serial.println("[MEMORY] Settings successfully saved to Flash storage!");
-  }
+// --- AUTOMATIC DISPLAY DIMMER (30 seconds of inactivity) ---
+if (!isDisplayDimmed && (millis() - lastInteractionTime > DIM_TIMEOUT_MS)) {
+analogWrite(TFT_BLK, BRIGHTNESS_LOW);
+isDisplayDimmed = true;
 }
-
+// --- SMART NON-VOLATILE FLASH SAVE (Triggers after 3 seconds of inactivity) ---
+if (saveRequired && (millis() - lastInteractionTime > 3000)) {
+prefs.begin("audio-settings", false);
+for (int i = 0; i < 4; i++) {
+String idx = String(i + 1);
+prefs.putInt(("vol" + idx).c_str(), channelVolume[i]);
+prefs.putInt(("bas" + idx).c_str(), channelBass[i]);
+prefs.putInt(("tre" + idx).c_str(), channelTreble[i]);
+}
+prefs.putInt("balance", balance);
+prefs.putInt("input", inputSource);
+prefs.putBool("loudness", isLoudnessOn);
+prefs.end();
+saveRequired = false;
+Serial.println("[MEMORY] Per-Channel Profiles & Settings saved to Flash!");
+}
+}
+// --- SOFT-RAMP SMOOTH VOLUME TRANSITION (~180ms max) ---
+void softRampToVolume(int targetVol) {
+targetVol = constrain(targetVol, -55, 30);
+int diff = targetVol - currentAppliedVol;
+if (diff == 0) {
+updateAudioHardware(targetVol);
+return;
+}
+int steps = min(abs(diff), 18); // Up to 18 smooth steps
+int delayPerStep = 10;          // 10ms per step -> max 180ms transition
+for (int s = 1; s <= steps; s++) {
+int interpVol = currentAppliedVol + ((diff * s) / steps);
+updateAudioHardware(interpVol);
+delay(delayPerStep);
+}
+currentAppliedVol = targetVol;
+updateAudioHardware(currentAppliedVol);
+}
 // Helper function for dynamic right-alignment on the text interface
 void printRightAligned(String text, int max_X, int y) {
-  int textWidth = text.length() * 12; // Each char is exactly 12px wide at TextSize 2
-  int start_X = max_X - textWidth;
-  tft.setCursor(start_X, y);
-  tft.print(text);
-} 
-
-// --- REFRESH DISPLAY INTERFACE (Your Exact Custom Fine-Tuned Layout) ---
-void updateDisplayGUI() {
-  tft.setTextWrap(false);
-  tft.setTextSize(2);
-  
-  // --- ROW 1: VOL, BAS, SRC ---
-  // VOL / MUTE Area
-  if (isMuted) {
-    tft.setTextColor(PANEL_RED, PANEL_BLACK);
-    tft.setCursor(20, 6); tft.print("MUT"); 
-    tft.fillRect(0, 26, 60, 16, PANEL_BLACK); 
-    tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
-    tft.setCursor(2, 26); tft.print("MUTE"); 
-  } else {
-    tft.setTextColor(currentMode == 0 ? PANEL_YELLOW : PANEL_BLUE, PANEL_BLACK);
-    tft.setCursor(20, 6); tft.print("VOL"); 
-    tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
-    tft.fillRect(0, 26, 60, 16, PANEL_BLACK); // Ghost-pixel eraser box
-    
-    String volStr = String(volumeDb) + "dB";
-    printRightAligned(volStr, 60, 26);
-  }
-
-  // BAS (Bass)
-  tft.setTextColor(currentMode == 1 ? PANEL_YELLOW : PANEL_BLUE, PANEL_BLACK);
-  tft.setCursor(72, 6); tft.print("BAS");
-  tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
-  tft.fillRect(65, 26, 50, 16, PANEL_BLACK); 
-  
-  String basStr = (bassDb >= 0 ? "+" : "") + String(bassDb) + "dB";
-  printRightAligned(basStr, 115, 26);
-
-  // SRC / CH (Source channel Input)
-  tft.setTextColor(currentMode == 4 ? PANEL_YELLOW : PANEL_BLUE, PANEL_BLACK);
-  tft.setCursor(120, 6); tft.print("SRC");
-  tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
-  tft.fillRect(120, 26, 40, 16, PANEL_BLACK); 
-  tft.setCursor(120, 26); tft.print("IN"); tft.print(inputSource);
-
-  // --- ROW 2: BAL, TRE ---
-  // BAL (Balance)
-  tft.setTextColor(currentMode == 3 ? PANEL_YELLOW : PANEL_BLUE, PANEL_BLACK);
-  tft.setCursor(24, 45); tft.print("BAL");
-  tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
-  tft.fillRect(0, 65, 95, 16, PANEL_BLACK); 
-  tft.setCursor(2, 65); 
-  if (balance == 0) {
-    tft.print("CENTER"); 
-  } else if (balance < 0) {
-    tft.print("L "); tft.print(balance); 
-  } else {
-    tft.print("R +"); tft.print(balance); 
-  }
-
-  // TRE (Treble)
-  tft.setTextColor(currentMode == 2 ? PANEL_YELLOW : PANEL_BLUE, PANEL_BLACK);
-  tft.setCursor(110, 45); tft.print("TRE");
-  tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
-  
-  // FIXED: Eraser box adjusted perfectly to X=95 to clean any leftover +/- chars without bleeding into BAL
-  tft.fillRect(95, 65, 60, 16, PANEL_BLACK); 
-  
-  String treStr = (trebleDb >= 0 ? "+" : "") + String(trebleDb) + "dB";
-  printRightAligned(treStr, 155, 65);
+int textWidth = text.length() * 12; // Each char is exactly 12px wide at TextSize 2
+int start_X = max_X - textWidth;
+tft.setCursor(start_X, y);
+tft.print(text);
 }
-
+// --- REFRESH DISPLAY INTERFACE ---
+void updateDisplayGUI() {
+int chIdx = constrain(inputSource - 1, 0, 3);
+int activeVol = channelVolume[chIdx];
+int activeBas = channelBass[chIdx];
+int activeTre = channelTreble[chIdx];
+tft.setTextWrap(false);
+tft.setTextSize(2);
+// --- ROW 1: VOL, BAS, SRC ---
+if (isMuted) {
+tft.setTextColor(PANEL_RED, PANEL_BLACK);
+tft.setCursor(20, 6); tft.print("MUT");
+tft.fillRect(0, 26, 60, 16, PANEL_BLACK);
+tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
+tft.setCursor(2, 26); tft.print("MUTE");
+} else {
+tft.setTextColor(currentMode == 0 ? PANEL_YELLOW : PANEL_BLUE, PANEL_BLACK);
+tft.setCursor(20, 6); tft.print("VOL");
+tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
+tft.fillRect(0, 26, 60, 16, PANEL_BLACK);
+String volStr = (activeVol > 0 ? "+" : "") + String(activeVol) + "dB";
+printRightAligned(volStr, 60, 26);
+}
+// BAS (Per-channel Bass)
+tft.setTextColor(currentMode == 1 ? PANEL_YELLOW : PANEL_BLUE, PANEL_BLACK);
+tft.setCursor(72, 6); tft.print("BAS");
+tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
+tft.fillRect(65, 26, 50, 16, PANEL_BLACK);
+String basStr = (activeBas >= 0 ? "+" : "") + String(activeBas) + "dB";
+printRightAligned(basStr, 115, 26);
+// SRC / CH (Source channel Input)
+tft.setTextColor(currentMode == 4 ? PANEL_YELLOW : PANEL_BLUE, PANEL_BLACK);
+tft.setCursor(120, 6); tft.print("SRC");
+tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
+tft.fillRect(120, 26, 40, 16, PANEL_BLACK);
+tft.setCursor(120, 26); tft.print("IN"); tft.print(inputSource);
+// --- ROW 2: BAL, LOUDNESS INDICATOR, TRE ---
+// BAL (Balance)
+tft.setTextColor(currentMode == 3 ? PANEL_YELLOW : PANEL_BLUE, PANEL_BLACK);
+tft.setCursor(24, 45); tft.print("BAL");
+tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
+tft.fillRect(0, 65, 95, 16, PANEL_BLACK);
+tft.setCursor(2, 65);
+if (balance == 0) {
+tft.print("CENTER");
+} else if (balance < 0) {
+tft.print("L "); tft.print(balance);
+} else {
+tft.print("R -"); tft.print(balance);
+}
+// Loudness indicator ("LDNS" in yellow between BAL and TRE when active)
+  tft.fillRect(72, 45, 26, 16, PANEL_BLACK);
+  if (isLoudnessOn) {
+    tft.setTextSize(1);
+    tft.setTextColor(PANEL_YELLOW, PANEL_BLACK);
+    tft.setCursor(73, 49);
+    tft.print("LDNS");
+    tft.setTextSize(2); 
+  }
+// TRE (Per-channel Treble)
+tft.setTextColor(currentMode == 2 ? PANEL_YELLOW : PANEL_BLUE, PANEL_BLACK);
+tft.setCursor(110, 45); tft.print("TRE");
+tft.setTextColor(PANEL_WHITE, PANEL_BLACK);
+tft.fillRect(95, 65, 60, 16, PANEL_BLACK);
+String treStr = (activeTre >= 0 ? "+" : "") + String(activeTre) + "dB";
+printRightAligned(treStr, 155, 65);
+}
 // --- LOW-LEVEL I2C COMMUNICATION TO TDA7440 ---
 void tdaWrite(byte reg, byte val) {
-  Wire.beginTransmission(TDA_ADDR);
-  Wire.write(reg);
-  Wire.write(val);
-  Wire.endTransmission();
+Wire.beginTransmission(TDA_ADDR);
+Wire.write(reg);
+Wire.write(val);
+Wire.endTransmission();
 }
-
 // --- SYNC STATE TO TDA7440 AUDIO PROCESSOR HARDWARE ---
-void updateAudioHardware() {
-  int inputGain = 0;
-  int finalVolAttenuation = 0;
-
-  // Split volume range between positive Gain and negative Attenuation
-  if (volumeDb > 0) {
-    inputGain = volumeDb;        // 0 to +30dB range
-    finalVolAttenuation = 0;     // No main attenuation needed
-  } else {
-    inputGain = 0;               // No positive gain needed
-    finalVolAttenuation = abs(volumeDb); // 0 to 55dB attenuation range
-  }
-
-  // 1. REGISTER 0x00: Input Selector & Input Gain Stage
-  // Input Gain scale: 2dB per step (Max +30dB requires a value of 15)
-  byte gainVal = constrain(inputGain / 2, 0, 15);
-  // Lower 3 bits control Input channel (0-3), upper bits control Input Gain
-  tdaWrite(0x00, (inputSource - 1) | (gainVal << 3));
-
-  // 2. REGISTER 0x02: Main Volume Attenuation
-  if (isMuted) {
-    tdaWrite(0x02, 56); // Safe maximum attenuation (Hardware Mute state)
-  } else {
-    // The main volume register caps at 47dB. 
-    // Any remaining attenuation beyond 47dB will be offloaded to the speaker registers.
-    byte volVal = constrain(finalVolAttenuation, 0, 47);
-    tdaWrite(0x02, volVal);
-  }
-
-  // 3. REGISTERS 0x04 & 0x05: Left & Right Speaker Attenuation (Balance Block)
-  // If the required attenuation is deeper than -47dB (e.g. -55dB), apply the rest here.
-  int extraAttenuation = (finalVolAttenuation > 47) ? (finalVolAttenuation - 47) : 0;
-
-  int attenuationL = extraAttenuation;
-  int attenuationR = extraAttenuation;
-
-  // Overlay the user-selected Left/Right balance offset
-  if (balance < 0)  attenuationR += abs(balance);
-  else if (balance > 0) attenuationL += abs(balance);
-
-  tdaWrite(0x04, constrain(attenuationL, 0, 79)); // Left Speaker Attenuation
-  tdaWrite(0x05, constrain(attenuationR, 0, 79)); // Right Speaker Attenuation
-
-  // 4. REGISTERS 0x06 & 0x07: Tone Control (Bass & Treble)
-  // Maps software values (-14 to +14) to the internal register scale (0x07 is flat 0dB)
-  tdaWrite(0x06, 7 - (bassDb / 2));   // Register 0x06 handles Bass on TDA7440
-  tdaWrite(0x07, 7 - (trebleDb / 2)); // Register 0x07 handles Treble on TDA7440
+void updateAudioHardware(int targetVol) {
+int chIdx = constrain(inputSource - 1, 0, 3);
+// 1. REGISTER 0x00: Input Selector & Input Gain Stage (0 to +30dB)
+byte gainVal = (targetVol > 0) ? constrain(targetVol / 2, 0, 15) : 0;
+tdaWrite(0x00, chIdx | (gainVal << 3));
+// 2. REGISTER 0x02: Main Volume Attenuation (0 to 55dB attenuation)
+int finalVolAttenuation = (targetVol < 0) ? abs(targetVol) : 0;
+if (isMuted) {
+tdaWrite(0x02, 56); // Safe maximum attenuation (Hardware Mute state)
+} else {
+byte volVal = constrain(finalVolAttenuation, 0, 47);
+tdaWrite(0x02, volVal);
+}
+// 3. REGISTERS 0x04 & 0x05: Left & Right Speaker Attenuation (Balance Block)
+int extraAttenuation = (finalVolAttenuation > 47) ? (finalVolAttenuation - 47) : 0;
+int attenuationL = extraAttenuation;
+int attenuationR = extraAttenuation;
+if (balance < 0)  attenuationR += abs(balance);
+else if (balance > 0) attenuationL += abs(balance);
+tdaWrite(0x04, constrain(attenuationL, 0, 79)); // Left Speaker Attenuation
+tdaWrite(0x05, constrain(attenuationR, 0, 79)); // Right Speaker Attenuation
+// 4. REGISTERS 0x06 & 0x07: Tone Control (Per-Channel Bass & Treble + Loudness Boost)
+int effectiveBass = channelBass[chIdx];
+int effectiveTreble = channelTreble[chIdx];
+if (isLoudnessOn && targetVol < -15) {
+// Gradually boosts up to +4dB Bass and +2dB Treble as volume drops from -15dB to -45dB
+int loudFactor = constrain(abs(targetVol + 15), 0, 30);
+effectiveBass   = constrain(effectiveBass + ((loudFactor * 4) / 30), -14, 14);
+effectiveTreble = constrain(effectiveTreble + ((loudFactor * 2) / 30), -14, 14);
+}
+tdaWrite(0x06, 7 - (effectiveBass / 2));   // Register 0x06 handles Bass on TDA7440
+tdaWrite(0x07, 7 - (effectiveTreble / 2)); // Register 0x07 handles Treble on TDA7440
 }
